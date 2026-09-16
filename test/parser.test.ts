@@ -93,6 +93,41 @@ describe("Effect function discovery", () => {
   });
 
   it.each([
+    ["default parameter", "function outer(Effect = other)"],
+    ["rest parameter", "function outer(...Effect: any[])"],
+    ["renamed property", "function outer({ api: Effect }: any)"],
+    ["object rest", "function outer({ api, ...Effect }: any)"],
+    ["array element", "function outer([Effect]: any[])"],
+    ["array hole", "function outer([, Effect]: any[])"],
+    ["array rest", "function outer([first, ...Effect]: any[])"],
+    ["nested default", "function outer({ api: [, Effect = other] }: any)"],
+  ])("respects %s bindings without hiding the outer import", (_label, declaration) => {
+    const units = parse(`import * as Effect from "effect/Effect";
+      ${declaration} { return Effect.gen(function* () { return 0; }); }
+      const real = Effect.gen(function* () { return 1; });`);
+    expect(units.map((unit) => unit.kind)).toEqual(["function", "function", "effect.gen"]);
+  });
+
+  it("respects constructor parameter properties without hiding the outer import", () => {
+    const units = parse(`import * as Effect from "effect/Effect";
+      class Service {
+        constructor(public Effect: any) {
+          Effect.gen(function* () { return 0; });
+        }
+      }
+      const real = Effect.gen(function* () { return 1; });`);
+    expect(units.map((unit) => unit.kind)).toEqual(["function", "function", "effect.gen"]);
+  });
+
+  it("binds destructuring targets rather than property keys", () => {
+    const units = parse(`import * as Effect from "effect/Effect";
+      function outer({ Effect: local = other }: any) {
+        return Effect.gen(function* () { return 0; });
+      }`);
+    expect(units.map((unit) => unit.kind)).toEqual(["function", "effect.gen"]);
+  });
+
+  it.each([
     'import { Effect } from "other";',
     'import type { Effect } from "effect";',
     'import { type Effect } from "effect";',
