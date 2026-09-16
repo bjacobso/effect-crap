@@ -1,5 +1,5 @@
-import type { Node } from "oxc-parser";
-import { children, isFunction, propertyName, unwrap } from "./ast.js";
+import type * as Oxc from "oxc-parser";
+import * as Ast from "./ast.js";
 
 type Binding = "effect" | "namespace" | "gen" | "fn" | "fnUntraced" | "local";
 interface Scope {
@@ -8,7 +8,7 @@ interface Scope {
   bindings: Map<string, Binding>;
 }
 
-function bindPattern(node: Node, scope: Scope): void {
+function bindPattern(node: Oxc.Node, scope: Scope): void {
   switch (node.type) {
     case "Identifier":
       scope.bindings.set(node.name, "local");
@@ -43,10 +43,10 @@ function importBinding(source: string, imported: string): Binding {
 }
 
 /** Two passes allow later declarations (including hoisted var) to shadow imports. */
-export function resolveBindings(program: Node): (node: Node) => Binding | undefined {
-  const scopes = new WeakMap<Node, Scope>();
+export function resolveBindings(program: Oxc.Node): (node: Oxc.Node) => Binding | undefined {
+  const scopes = new WeakMap<Oxc.Node, Scope>();
   const root: Scope = { bindings: new Map(), functionScope: true };
-  const visit = (node: Node, outer: Scope): void => {
+  const visit = (node: Oxc.Node, outer: Scope): void => {
     if (
       node.type === "TSEnumDeclaration" ||
       node.type === "TSModuleDeclaration" ||
@@ -57,7 +57,7 @@ export function resolveBindings(program: Node): (node: Node) => Binding | undefi
     if ((node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") && node.id)
       bindPattern(node.id, outer);
     const createsScope =
-      isFunction(node) ||
+      Ast.isFunction(node) ||
       [
         "BlockStatement",
         "CatchClause",
@@ -74,12 +74,12 @@ export function resolveBindings(program: Node): (node: Node) => Binding | undefi
       ? {
           parent: outer,
           bindings: new Map<string, Binding>(),
-          functionScope: isFunction(node) || node.type === "StaticBlock",
+          functionScope: Ast.isFunction(node) || node.type === "StaticBlock",
         }
       : outer;
     scopes.set(node, scope);
 
-    if (isFunction(node)) {
+    if (Ast.isFunction(node)) {
       if (node.id) bindPattern(node.id, scope);
       for (const param of node.params) bindPattern(param, scope);
     }
@@ -104,17 +104,17 @@ export function resolveBindings(program: Node): (node: Node) => Binding | undefi
                 ? "effect"
                 : "local";
         } else if (specifier.type === "ImportSpecifier") {
-          binding = importBinding(node.source.value, propertyName(specifier.imported) ?? "");
+          binding = importBinding(node.source.value, Ast.propertyName(specifier.imported) ?? "");
         }
         scope.bindings.set(specifier.local.name, binding);
       }
     }
-    for (const child of children(node)) visit(child, scope);
+    for (const child of Ast.children(node)) visit(child, scope);
   };
   visit(program, root);
 
-  const resolve = (input: Node): Binding | undefined => {
-    const node = unwrap(input);
+  const resolve = (input: Oxc.Node): Binding | undefined => {
+    const node = Ast.unwrap(input);
     if (node.type === "Identifier") {
       let scope = scopes.get(node);
       while (scope) {
@@ -124,7 +124,7 @@ export function resolveBindings(program: Node): (node: Node) => Binding | undefi
     }
     if (node.type === "MemberExpression") {
       if (node.computed && node.property.type !== "Literal") return undefined;
-      const name = propertyName(node.property);
+      const name = Ast.propertyName(node.property);
       const object = resolve(node.object);
       if (object === "namespace" && name === "Effect") return "effect";
       if (object === "effect" && (name === "gen" || name === "fn" || name === "fnUntraced"))

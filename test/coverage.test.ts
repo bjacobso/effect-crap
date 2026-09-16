@@ -1,19 +1,17 @@
-import { Effect } from "effect";
+import * as Path from "@effect/platform/Path";
+import * as Coverage from "../src/coverage.js";
+import * as Parser from "../src/parser.js";
+import * as Runtime from "./runtime.js";
+import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
-import {
-  attributeCoverage,
-  calculateCrap,
-  findCoverage,
-  parseCoverage,
-  type CoverageFile,
-} from "../src/coverage.js";
-import { parseSource } from "../src/parser.js";
+
+const path = Runtime.runSync(Path.Path.pipe(Effect.provide(Path.layer)));
 
 const range = (start: number, end: number) => ({
   start: { line: 1, column: start },
   end: { line: 1, column: end },
 });
-const emptyFile: CoverageFile = {
+const emptyFile: Coverage.CoverageFile = {
   path: "/project/a.ts",
   statementMap: {},
   s: {},
@@ -25,21 +23,21 @@ const emptyFile: CoverageFile = {
 
 describe("CRAP", () => {
   it("uses the canonical formula and preserves unknown coverage", () => {
-    expect(calculateCrap(4, 0)).toBe(20);
-    expect(calculateCrap(4, 0.5)).toBe(6);
-    expect(calculateCrap(4, 1)).toBe(4);
-    expect(calculateCrap(4, null)).toBeNull();
+    expect(Coverage.calculateCrap(4, 0)).toBe(20);
+    expect(Coverage.calculateCrap(4, 0.5)).toBe(6);
+    expect(Coverage.calculateCrap(4, 1)).toBe(4);
+    expect(Coverage.calculateCrap(4, null)).toBeNull();
   });
   it.each([-1, 1.1, NaN, Infinity])("rejects invalid coverage %s", (value) =>
-    expect(() => calculateCrap(2, value)).toThrow("Coverage must be between 0 and 1"),
+    expect(() => Coverage.calculateCrap(2, value)).toThrow("Coverage must be between 0 and 1"),
   );
 });
 
 describe("coverage attribution", () => {
   it("does not borrow nested callback statements", () => {
     const source = "const outer = () => { const inner = () => 1; return inner(); };";
-    const units = Effect.runSync(parseSource("a.ts", source));
-    const covered = attributeCoverage(units, {
+    const units = Runtime.runSync(Parser.parseSource("a.ts", source));
+    const covered = Coverage.attributeCoverage(units, {
       ...emptyFile,
       statementMap: { "0": range(21, 43), "1": units[1]!.body, "2": range(44, 59) },
       s: { "0": 1, "1": 0, "2": 1 },
@@ -49,8 +47,10 @@ describe("coverage attribution", () => {
   });
 
   it("requires branch counters when source has branching", () => {
-    const units = Effect.runSync(parseSource("a.ts", "const f = (x: boolean) => x ? 1 : 0;"));
-    const result = attributeCoverage(units, {
+    const units = Runtime.runSync(
+      Parser.parseSource("a.ts", "const f = (x: boolean) => x ? 1 : 0;"),
+    );
+    const result = Coverage.attributeCoverage(units, {
       ...emptyFile,
       statementMap: { "0": units[0]!.body },
       s: { "0": 1 },
@@ -64,20 +64,24 @@ describe("coverage attribution", () => {
   });
 
   it("uses function hits for empty bodies and does not assume empty means covered", () => {
-    const units = Effect.runSync(parseSource("a.ts", "function a() {} function b() {}"));
-    const result = attributeCoverage(units, {
+    const units = Runtime.runSync(Parser.parseSource("a.ts", "function a() {} function b() {}"));
+    const result = Coverage.attributeCoverage(units, {
       ...emptyFile,
       fnMap: { "0": { name: "a", loc: units[0]!.body }, "1": { name: "b", loc: units[1]!.body } },
       f: { "0": 1, "1": 0 },
     });
     expect(result.map((item) => item.ratio)).toEqual([1, 0]);
-    expect(attributeCoverage(units, emptyFile).every((item) => item.ratio === null)).toBe(true);
+    expect(Coverage.attributeCoverage(units, emptyFile).every((item) => item.ratio === null)).toBe(
+      true,
+    );
   });
 
   it("uses the minimum of statement and branch ratios", () => {
-    const units = Effect.runSync(parseSource("a.ts", "const f = (x: boolean) => x ? 1 : 0;"));
+    const units = Runtime.runSync(
+      Parser.parseSource("a.ts", "const f = (x: boolean) => x ? 1 : 0;"),
+    );
     const body = units[0]!.body;
-    const [result] = attributeCoverage(units, {
+    const [result] = Coverage.attributeCoverage(units, {
       ...emptyFile,
       statementMap: { "0": body },
       s: { "0": 1 },
@@ -88,16 +92,24 @@ describe("coverage attribution", () => {
   });
 
   it("matches paths exactly, including report-relative paths, without guessing suffixes", () => {
-    expect(findCoverage({ "a.ts": emptyFile }, "/project/a.ts", "/project")).toBe(emptyFile);
+    expect(Coverage.findCoverage({ "a.ts": emptyFile }, "/project/a.ts", "/project", path)).toBe(
+      emptyFile,
+    );
     expect(
-      findCoverage(
+      Coverage.findCoverage(
         { "/other/a.ts": { ...emptyFile, path: "/other/a.ts" } },
         "/project/a.ts",
         "/project",
+        path,
       ),
     ).toBeUndefined();
     expect(
-      findCoverage({ "a.ts": emptyFile, "./a.ts": emptyFile }, "/project/a.ts", "/project"),
+      Coverage.findCoverage(
+        { "a.ts": emptyFile, "./a.ts": emptyFile },
+        "/project/a.ts",
+        "/project",
+        path,
+      ),
     ).toBeUndefined();
   });
 
@@ -114,6 +126,6 @@ describe("coverage attribution", () => {
       },
     }),
   ])("rejects corrupt coverage: %s", (json) => {
-    expect(Effect.runSync(Effect.either(parseCoverage(json)))._tag).toBe("Left");
+    expect(Runtime.runSync(Effect.either(Coverage.parseCoverage(json)))._tag).toBe("Left");
   });
 });

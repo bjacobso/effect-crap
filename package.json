@@ -12,6 +12,10 @@
   ],
   "type": "module",
   "exports": {
+    "./oxc": {
+      "types": "./dist/oxc.d.ts",
+      "import": "./dist/oxc.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -29,6 +33,8 @@
     "check": "npm run typecheck && npm run lint && npm run fmt:check && npm test && npm run build"
   },
   "dependencies": {
+    "@effect/platform": "^0.97.2",
+    "@effect/platform-node": "^0.108.2",
     "effect": "^3.22.2",
     "oxc-parser": "^0.150.0"
   },
@@ -36,6 +42,7 @@
     "@types/node": "^24.13.5",
     "@vitest/coverage-istanbul": "^5.0.1",
     "@vitest/coverage-v8": "^5.0.1",
+    "esbuild": "^0.28.2",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",
     "tsx": "^4.23.13",

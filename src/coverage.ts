@@ -1,13 +1,7 @@
-import path from "node:path";
-import { Effect, Schema } from "effect";
-import {
-  AnalysisError,
-  type CoverageCount,
-  type FunctionCoverage,
-  type FunctionUnit,
-  type Position,
-  type SourceRange,
-} from "./model.js";
+import * as Model from "./model.js";
+import type * as Path from "@effect/platform/Path";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 const Counter = Schema.Number.pipe(Schema.int(), Schema.nonNegative());
 const PositionSchema = Schema.Struct({
@@ -44,7 +38,7 @@ const ReportSchema = record(FileSchema);
 export type CoverageFile = typeof FileSchema.Type;
 export type CoverageReport = typeof ReportSchema.Type;
 
-export const parseCoverage = (text: string): Effect.Effect<CoverageReport, AnalysisError> =>
+export const parseCoverage = (text: string): Effect.Effect<CoverageReport, Model.AnalysisError> =>
   Schema.decodeUnknown(Schema.parseJson(ReportSchema))(text).pipe(
     Effect.flatMap((report) =>
       Effect.try({
@@ -89,21 +83,24 @@ export const parseCoverage = (text: string): Effect.Effect<CoverageReport, Analy
     ),
     Effect.mapError(
       (cause) =>
-        new AnalysisError({ message: `Invalid Istanbul coverage JSON: ${String(cause)}`, cause }),
+        new Model.AnalysisError({
+          message: `Invalid Istanbul coverage JSON: ${String(cause)}`,
+          cause,
+        }),
     ),
   );
 
-function compare(a: Position, b: Position): number {
+function compare(a: Model.Position, b: Model.Position): number {
   return a.line - b.line || a.column - b.column;
 }
 
-function contains(outer: SourceRange, inner: SourceRange): boolean {
+function contains(outer: Model.SourceRange, inner: Model.SourceRange): boolean {
   return compare(outer.start, inner.start) <= 0 && compare(outer.end, inner.end) >= 0;
 }
 
 type CoverageRange = typeof RangeSchema.Type;
 
-function containsCoverage(outer: SourceRange, inner: CoverageRange): boolean {
+function containsCoverage(outer: Model.SourceRange, inner: CoverageRange): boolean {
   return (
     compare(outer.start, inner.start) <= 0 &&
     compare(inner.start, outer.end) < 0 &&
@@ -113,12 +110,12 @@ function containsCoverage(outer: SourceRange, inner: CoverageRange): boolean {
   );
 }
 
-function count(hits: readonly number[], empty: number | null): CoverageCount {
+function count(hits: readonly number[], empty: number | null): Model.CoverageCount {
   const covered = hits.filter((hit) => hit > 0).length;
   return { covered, total: hits.length, ratio: hits.length ? covered / hits.length : empty };
 }
 
-export function unknownCoverage(reason: string): FunctionCoverage {
+export function unknownCoverage(reason: string): Model.FunctionCoverage {
   return {
     status: "unknown",
     reason,
@@ -132,6 +129,7 @@ export function findCoverage(
   report: CoverageReport,
   file: string,
   root: string,
+  path: Path.Path,
 ): CoverageFile | undefined {
   const matches = Object.entries(report).filter(
     ([key, value]) => path.resolve(root, key) === file || path.resolve(root, value.path) === file,
@@ -141,9 +139,9 @@ export function findCoverage(
 
 /** Assign a counter to the innermost containing function, never both child and parent. */
 export function attributeCoverage(
-  units: readonly FunctionUnit[],
+  units: readonly Model.FunctionUnit[],
   file?: CoverageFile,
-): FunctionCoverage[] {
+): Model.FunctionCoverage[] {
   if (!file) return units.map(() => unknownCoverage("No unambiguous coverage entry for this file"));
   const statements = units.map(() => [] as number[]);
   const branches = units.map(() => [] as number[]);

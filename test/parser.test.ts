@@ -1,12 +1,14 @@
-import { Effect } from "effect";
+import * as Parser from "../src/parser.js";
+import * as Runtime from "./runtime.js";
+import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
-import { parseSource } from "../src/parser.js";
 
-const parse = (source: string, file = "sample.ts") => Effect.runSync(parseSource(file, source));
+const parse = (source: string, file = "sample.ts") =>
+  Runtime.runSync(Parser.parseSource(file, source));
 
 describe("Effect function discovery", () => {
   it("finds a named generator and counts its branches, not its yields", () => {
-    const [unit] = parse(`import { Effect } from "effect";
+    const [unit] = parse(`import * as Effect from "effect/Effect";
       const checkout = Effect.gen(function* () {
         const x = yield* Effect.succeed(1);
         if (x) return yield* Effect.succeed(2);
@@ -31,7 +33,7 @@ describe("Effect function discovery", () => {
   });
 
   it("supports gen with context, fn with ordinary callbacks and pipe wrappers", () => {
-    const units = parse(`import { Effect } from "effect";
+    const units = parse(`import * as Effect from "effect/Effect";
       const a = Effect.gen(this, function* () { return 1; }).pipe(Effect.asVoid);
       const b = Effect.fn((x: boolean) => x ? Effect.void : Effect.void);
       const c = Effect.fn("c")(function* () { return 1 }, (effect) => effect);`);
@@ -44,7 +46,7 @@ describe("Effect function discovery", () => {
   });
 
   it("scores wrapper, generator, and nested helper independently", () => {
-    const units = parse(`import { Effect } from "effect";
+    const units = parse(`import * as Effect from "effect/Effect";
       const task = () => Effect.gen(function* () {
         const helper = (x: boolean) => x ? 1 : 0;
         if (helper(true)) return 1;
@@ -68,12 +70,14 @@ describe("Effect function discovery", () => {
     "const outer = function Effect() { return Effect.gen(function* () { return 1; }); };",
   ])("respects shadowing: %s", (source) => {
     expect(
-      parse(`import { Effect } from "effect"; ${source}`).every((unit) => unit.kind === "function"),
+      parse(`import * as Effect from "effect/Effect"; ${source}`).every(
+        (unit) => unit.kind === "function",
+      ),
     ).toBe(true);
   });
 
   it("keeps outer imports visible outside a shadowing block", () => {
-    const units = parse(`import { Effect } from "effect";
+    const units = parse(`import * as Effect from "effect/Effect";
       { const Effect = other; Effect.gen(function* () { return 0; }); }
       const real = Effect.gen(function* () { return 1; });`);
     expect(units.map((unit) => unit.kind)).toEqual(["function", "effect.gen"]);
@@ -148,7 +152,7 @@ describe("ordinary TypeScript", () => {
   });
 
   it("fails on malformed input instead of reporting partial results", () => {
-    const result = Effect.runSync(Effect.either(parseSource("broken.ts", "const x = (")));
+    const result = Runtime.runSync(Effect.either(Parser.parseSource("broken.ts", "const x = (")));
     expect(result._tag).toBe("Left");
     expect(result).toMatchObject({
       _tag: "Left",

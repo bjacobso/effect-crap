@@ -1,11 +1,12 @@
+import * as Cli from "../src/cli.js";
+import * as Analyze from "../src/analyze.js";
+import * as Runtime from "./runtime.js";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { analyze } from "../src/analyze.js";
-import { runCli } from "../src/cli.js";
 
 const temporary: string[] = [];
 async function temp() {
@@ -37,8 +38,8 @@ describe("real coverage providers", () => {
         ],
         { timeout: 60_000, stdio: "pipe" },
       );
-      const report = await Effect.runPromise(
-        analyze({
+      const report = await Runtime.runPromise(
+        Analyze.analyze({
           paths: ["test/fixtures/project/src"],
           coverage: path.join(directory, "coverage-final.json"),
           threshold: 5,
@@ -77,8 +78,8 @@ describe("real coverage providers", () => {
       expect(byName("emptyCalled").coverage.ratio).toBe(1);
       expect(byName("emptyUncalled").coverage.ratio).toBe(0);
 
-      const cli = await Effect.runPromise(
-        runCli([
+      const cli = await Runtime.runPromise(
+        Cli.runCli([
           "test/fixtures/project/src",
           "--coverage",
           path.join(directory, "coverage-final.json"),
@@ -96,21 +97,39 @@ describe("real coverage providers", () => {
 });
 
 describe("CLI and source selection", () => {
+  it("skips directory cycles and broken symlinks during traversal", async () => {
+    const root = await temp();
+    await mkdir(path.join(root, "src"));
+    await writeFile(path.join(root, "src/a.ts"), "export const f = () => 1;");
+    await symlink(path.join(root, "src"), path.join(root, "src/cycle"), "dir");
+    await symlink(path.join(root, "missing.ts"), path.join(root, "src/broken.ts"));
+    const report = await Runtime.runPromise(Analyze.analyze({ root }));
+    expect(report.files).toEqual(["src/a.ts"]);
+  });
+
+  it("accepts assigned options and the positional separator", async () => {
+    const root = await temp();
+    await writeFile(path.join(root, "-source.ts"), "export const f = () => 1;");
+    const result = await Runtime.runPromise(
+      Cli.runCli([`--root=${root}`, "--format=json", "--threshold=8", "--", "-source.ts"]),
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({ files: ["-source.ts"], threshold: 8 });
+  });
   it("reports unknown coverage honestly and can require it", async () => {
     const root = await temp();
     await mkdir(path.join(root, "src"));
     await writeFile(path.join(root, "src/a.ts"), "export const f = () => 1;");
     await writeFile(path.join(root, "src/a.test.ts"), "invalid test syntax skipped");
     await writeFile(path.join(root, "src/types.d.ts"), "invalid declaration syntax skipped");
-    const output = await Effect.runPromise(
-      runCli(["--root", root, "--format", "json", "--require-coverage"]),
+    const output = await Runtime.runPromise(
+      Cli.runCli(["--root", root, "--format", "json", "--require-coverage"]),
     );
     expect(output.exitCode).toBe(3);
     expect(JSON.parse(output.stdout)).toMatchObject({
       files: ["src/a.ts"],
       summary: { total: 1, failed: 0, unknown: 1 },
     });
-    const noGate = await Effect.runPromise(runCli(["--root", root]));
+    const noGate = await Runtime.runPromise(Cli.runCli(["--root", root]));
     expect(noGate.exitCode).toBe(0);
     expect(noGate.stdout).toContain("N/A");
   });
@@ -120,7 +139,7 @@ describe("CLI and source selection", () => {
     await mkdir(path.join(root, "src/dist"), { recursive: true });
     await writeFile(path.join(root, "src/a.ts"), "export const f = () => 1;");
     await writeFile(path.join(root, "src/dist/ignored.ts"), "broken (");
-    const result = await Effect.runPromise(analyze({ root, paths: ["src", "src/a.ts"] }));
+    const result = await Runtime.runPromise(Analyze.analyze({ root, paths: ["src", "src/a.ts"] }));
     expect(result.functions).toHaveLength(1);
   });
 
@@ -133,12 +152,12 @@ describe("CLI and source selection", () => {
     ["does-not-exist.ts"],
     ["src", "--coverage", "missing.json"],
   ])("fails for %j", async (...args) => {
-    const result = await Effect.runPromise(Effect.either(runCli(args)));
+    const result = await Runtime.runPromise(Effect.either(Cli.runCli(args)));
     expect(result._tag).toBe("Left");
   });
 
   it("prints help without reading a project", async () => {
-    const result = await Effect.runPromise(runCli(["--help"]));
+    const result = await Runtime.runPromise(Cli.runCli(["--help"]));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Usage: effect-crap");
   });

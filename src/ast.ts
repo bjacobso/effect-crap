@@ -1,9 +1,9 @@
-import { visitorKeys, type ArrowFunctionExpression, type Function, type Node } from "oxc-parser";
-import type { Position } from "./model.js";
+import type * as Oxc from "oxc-parser";
+import type * as Model from "./model.js";
 
-export type FunctionNode = Function | ArrowFunctionExpression;
+export type FunctionNode = Oxc.Function | Oxc.ArrowFunctionExpression;
 
-export function isFunction(node: Node): node is FunctionNode {
+export function isFunction(node: Oxc.Node): node is FunctionNode {
   return (
     node.type === "FunctionDeclaration" ||
     node.type === "FunctionExpression" ||
@@ -11,17 +11,17 @@ export function isFunction(node: Node): node is FunctionNode {
   );
 }
 
-export function children(node: Node): Node[] {
-  const record = node as unknown as Record<string, unknown>;
-  return (visitorKeys[node.type] ?? []).flatMap((key) => {
-    const value = record[key];
+export function children(node: Oxc.Node): Oxc.Node[] {
+  // Only visit AST children; positions, comments and parent pointers are metadata.
+  return Object.entries(node).flatMap(([key, value]) => {
+    if (["parent", "loc", "range", "comments", "tokens"].includes(key)) return [];
     return (Array.isArray(value) ? value : [value]).filter(
-      (child): child is Node => child !== null && typeof child === "object" && "type" in child,
+      (child): child is Oxc.Node => child !== null && typeof child === "object" && "type" in child,
     );
   });
 }
 
-export function unwrap(node: Node): Node {
+export function unwrap(node: Oxc.Node): Oxc.Node {
   switch (node.type) {
     case "ParenthesizedExpression":
     case "TSAsExpression":
@@ -36,15 +36,15 @@ export function unwrap(node: Node): Node {
   }
 }
 
-export function propertyName(node: Node): string | undefined {
+export function propertyName(node: Oxc.Node): string | undefined {
   if (node.type === "Identifier" || node.type === "PrivateIdentifier") return node.name;
   if (node.type === "Literal" && (typeof node.value === "string" || typeof node.value === "number"))
     return String(node.value);
   return undefined;
 }
 
-/** Oxc's Node binding and Istanbul both use UTF-16 columns. */
-export function positionAt(source: string): (offset: number) => Position {
+/** Parser adapters and Istanbul both use UTF-16 columns. */
+export function positionAt(source: string): (offset: number) => Model.Position {
   const starts = [0];
   for (let i = 0; i < source.length; i++) {
     const char = source[i];

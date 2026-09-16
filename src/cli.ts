@@ -1,7 +1,6 @@
-import { parseArgs } from "node:util";
-import { Effect } from "effect";
-import { analyze } from "./analyze.js";
-import { AnalysisError, type AnalysisReport } from "./model.js";
+import * as Model from "./model.js";
+import * as Analyze from "./analyze.js";
+import * as Effect from "effect/Effect";
 
 export const usage = `Usage: effect-crap [paths...] [options]
 
@@ -20,7 +19,7 @@ Exit codes: 0 = no measured failures; 1 = usage/analysis error;
 No tests are executed automatically. Without coverage, CRAP is unknown.
 `;
 
-function textReport(report: AnalysisReport): string {
+function textReport(report: Model.AnalysisReport): string {
   const rows = report.functions.map((fn) => {
     const cov = fn.coverage.ratio === null ? "N/A" : `${(fn.coverage.ratio * 100).toFixed(1)}%`;
     return `${fn.status.padEnd(7)} CC ${String(fn.complexity).padStart(3)}  Cov ${cov.padStart(6)}  CRAP ${(fn.crap?.toFixed(2) ?? "N/A").padStart(7)}  ${fn.file}:${fn.range.start.line}:${fn.range.start.column + 1}  ${fn.name} [${fn.kind}]`;
@@ -36,30 +35,18 @@ function textReport(report: AnalysisReport): string {
 
 export const runCli = (
   args: string[],
-): Effect.Effect<{ stdout: string; exitCode: number }, AnalysisError> =>
+): Effect.Effect<{ stdout: string; exitCode: number }, Model.AnalysisError, Analyze.Services> =>
   Effect.gen(function* () {
     const { values, positionals } = yield* Effect.try({
-      try: () =>
-        parseArgs({
-          args,
-          allowPositionals: true,
-          options: {
-            help: { type: "boolean", short: "h" },
-            coverage: { type: "string" },
-            root: { type: "string" },
-            threshold: { type: "string" },
-            format: { type: "string", default: "text" },
-            "require-coverage": { type: "boolean", default: false },
-          },
-        }),
-      catch: (cause) => new AnalysisError({ message: String(cause), cause }),
+      try: () => parseArguments(args),
+      catch: (cause) => new Model.AnalysisError({ message: String(cause), cause }),
     });
     if (values.help) return { stdout: usage, exitCode: 0 };
     if (values.format !== "text" && values.format !== "json")
-      return yield* new AnalysisError({ message: "Format must be text or json" });
+      return yield* new Model.AnalysisError({ message: "Format must be text or json" });
     if (values.threshold !== undefined && !values.threshold.trim())
-      return yield* new AnalysisError({ message: "Threshold must be a number" });
-    const report = yield* analyze({
+      return yield* new Model.AnalysisError({ message: "Threshold must be a number" });
+    const report = yield* Analyze.analyze({
       paths: positionals,
       root: values.root,
       coverage: values.coverage,
@@ -76,3 +63,51 @@ export const runCli = (
             : 0,
     };
   });
+
+interface Arguments {
+  values: {
+    help?: boolean;
+    coverage?: string;
+    root?: string;
+    threshold?: string;
+    format: string;
+    "require-coverage": boolean;
+  };
+  positionals: string[];
+}
+
+/** Small portable argument parser; no runtime-specific CLI dependencies. */
+function parseArguments(args: readonly string[]): Arguments {
+  const result: Arguments = {
+    values: { format: "text", "require-coverage": false },
+    positionals: [],
+  };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") {
+      result.positionals.push(...args.slice(i + 1));
+      break;
+    }
+    if (arg === "--help" || arg === "-h") {
+      result.values.help = true;
+      continue;
+    }
+    if (arg === "--require-coverage") {
+      result.values["require-coverage"] = true;
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      result.positionals.push(arg);
+      continue;
+    }
+    const equals = arg.indexOf("=");
+    const key = (equals < 0 ? arg : arg.slice(0, equals)).slice(2);
+    if (!arg.startsWith("--") || !["coverage", "root", "threshold", "format"].includes(key))
+      throw new Error(`Unknown option: ${arg}`);
+    const value = equals < 0 ? args[++i] : arg.slice(equals + 1);
+    if (value === undefined || (equals < 0 && value.startsWith("--")))
+      throw new Error(`Missing value for --${key}`);
+    result.values[key as "coverage" | "root" | "threshold" | "format"] = value;
+  }
+  return result;
+}

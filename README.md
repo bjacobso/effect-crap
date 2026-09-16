@@ -6,7 +6,7 @@ This is a standalone prototype inspired by [crap-typescript](https://github.com/
 
 ## Run locally
 
-Requires Node.js 22.18 or later.
+The bundled CLI requires Node.js 22.18 or later. The core library uses injected Effect Platform services and has no Node runtime imports.
 
 ```sh
 npm ci
@@ -33,7 +33,7 @@ The analyzer reads coverage you supply; it does not run the target project's tes
 ## Effect-aware discovery
 
 ```ts
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 
 const checkout = Effect.gen(function* () {
   const quantity = yield* Effect.succeed(2);
@@ -98,20 +98,30 @@ Threshold failure takes precedence over incomplete coverage; JSON includes both 
 ## Library API
 
 ```ts
-import { Effect } from "effect";
-import { analyze } from "effect-crap";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Analyzer from "effect-crap";
+import * as Oxc from "effect-crap/oxc";
+
+const runtime = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, Oxc.layer);
 
 const report = await Effect.runPromise(
-  analyze({
-    root: process.cwd(),
+  Analyzer.analyze({
+    root: ".",
     paths: ["src"],
     coverage: "coverage/coverage-final.json",
     threshold: 6,
-  }),
+  }).pipe(Effect.provide(runtime)),
 );
 ```
 
-`analyze` returns `Effect<AnalysisReport, AnalysisError>`. `parseSource(file, source)` exposes function discovery without file I/O or coverage. `calculateCrap(complexity, coverage)` exposes the formula.
+`analyze` returns `Effect<AnalysisReport, AnalysisError, FileSystem | Path | SourceParser>`. Callers supply those services explicitly; the core does not choose a runtime or read `process.cwd()`. `root` defaults to `"."`, interpreted by the supplied filesystem. `parseSource(file, source)` requires only `SourceParser`. `calculateCrap(complexity, coverage)` remains pure.
+
+For other environments, supply their Effect Platform filesystem/path layers (or an in-memory filesystem and `@effect/platform/Path.layer`). The native `effect-crap/oxc` adapter is a separate opt-in entrypoint and is never imported by the core. A browser or WASM integration must provide a `SourceParser` layer with a `parse(file, source)` method returning an Effect containing an Oxc-compatible ESTree program with UTF-16 offsets. The parser adapter must reject invalid syntax through `AnalysisError`. No browser/WASM parser is bundled yet.
+
+Tests exercise analysis with an in-memory filesystem and injected parser, and verify that the core and CLI logic bundle for browsers without Node or native Oxc modules. Node-specific argv/output/exit handling lives only in `src/bin.ts`.
 
 ## Limits and next steps
 
