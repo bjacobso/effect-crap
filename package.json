@@ -1,0 +1,48 @@
+{
+  "name": "effect-crap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Effect-aware CRAP analysis for TypeScript, built with Effect and Oxc",
+  "bin": {
+    "effect-crap": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/bin.ts",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --deny-warnings .",
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
+    "check": "npm run typecheck && npm run lint && npm run fmt:check && npm test && npm run build"
+  },
+  "dependencies": {
+    "effect": "^3.22.2",
+    "oxc-parser": "^0.150.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.5",
+    "@vitest/coverage-istanbul": "^5.0.1",
+    "@vitest/coverage-v8": "^5.0.1",
+    "oxfmt": "^0.68.0",
+    "oxlint": "^1.83.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}
