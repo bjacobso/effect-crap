@@ -30,6 +30,65 @@ During development, use `npm run dev -- <arguments>` instead of building first. 
 
 The analyzer reads coverage you supply; it does not run the target project's tests. Enable the `json` coverage reporter in Vitest or Jest to produce Istanbul-format `coverage-final.json`. Vitest 5 V8/Istanbul and Vitest 3.2.7 V8 are tested end to end. Raw V8 JSON and LCOV are not accepted.
 
+## Integrate with CI
+
+Generate fresh Istanbul JSON coverage, then run the analyzer against the same checkout. With Vitest, configure `coverage.reporter: ["text", "json"]` and include all intended source files, including files the tests never import. Keep coverage exclusions and analyzer exclusions aligned: an uninstrumented function has unknown coverage, and `--require-coverage` makes that a failure.
+
+The package is not published yet. Another repository can check out a pinned analyzer revision into a tools directory and build it independently of the application's dependencies:
+
+```yaml
+name: CRAP analysis
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  crap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # This project script must produce coverage/coverage-final.json.
+      - run: npm run test:coverage
+      - uses: actions/checkout@v7
+        with:
+          repository: bjacobso/effect-crap
+          ref: c384bce0856b2e08eab60213a0c0526026ec8b86
+          path: .tools/effect-crap
+          persist-credentials: false
+      - run: npm ci && npm run build
+        working-directory: .tools/effect-crap
+      - name: Enforce CRAP scores and complete coverage attribution
+        run: >-
+          node .tools/effect-crap/dist/bin.js src
+          --root . --coverage coverage/coverage-final.json
+          --threshold 6 --require-coverage --format json
+          > coverage/crap-report.json
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: crap-analysis
+          path: |
+            coverage/coverage-final.json
+            coverage/crap-report.json
+          retention-days: 14
+```
+
+Adapt the package manager, source paths, exclusions, and threshold to the consuming project. Update the pinned revision deliberately when upgrading the analyzer. A score above the threshold or unknown coverage fails the analysis step; the report remains available as a [workflow artifact](https://docs.github.com/en/actions/tutorials/store-and-share-data) even when the gate fails. Test, build, and analyzer errors also fail CI. To make this a merge requirement, select the resulting check in the repository's branch rules.
+
+This repository runs the same flow in the `self-analysis` job on every push and pull request:
+
+```sh
+npm run build
+npm run test:coverage
+npm run analyze:self
+```
+
+Our initial blocking ceiling is **40**, with `--require-coverage` enabled. The first self-analysis measured 97 functions, no unknown coverage, and a highest score of 39.69; 24 functions exceeded the CLI's default threshold of 6. The ceiling is a starting policy to tighten as complex functions are refactored, not a per-function regression baseline. Scores below 40 can still worsen without failing CI. Only `src/bin.ts` is explicitly excluded, matching its existing coverage exclusion; the CLI logic in `src/cli.ts` is included. The job publishes counts in its summary and retains the coverage and analyzer JSON artifacts for 14 days.
+
 ## Effect-aware discovery
 
 ```ts
@@ -150,10 +209,11 @@ Tests exercise analysis with an in-memory filesystem and injected parser, and ve
 npm run check          # Typecheck, Oxlint, Oxfmt check, tests, build
 npm run fmt            # Format with Oxfmt
 npm run test:coverage  # Generate this analyzer's coverage
+npm run analyze:self   # Gate this project against fresh coverage (build first)
 npm run setup:compat   # Install the isolated, pinned Vitest 3 fixture dependencies
 npm run test:compat    # Exercise actual Vitest 3 V8 reports
 ```
 
 The tests include real Effect programs run under both Vitest 5 coverage providers and an isolated Vitest 3.2.7 V8 fixture, with fully covered, partially covered, never-executed, nested, and empty functions. Parser tests cover aliases, shadowing, TSX, Unicode positions, and complexity boundaries. Synthetic attribution regressions deliberately include shared-line hits, punctuation-expanded ranges, missing branch counters, and conflicting metadata. Compatibility fixtures contain no private application code.
 
-GitHub Actions runs the standard checks (including browser bundling and Vitest 5 integration tests) on Node 22 and 24, with a separate job for the pinned Vitest 3 fixture.
+GitHub Actions runs the standard checks (including browser bundling and Vitest 5 integration tests) on Node 22 and 24, with separate jobs for self-analysis and the pinned Vitest 3 fixture.

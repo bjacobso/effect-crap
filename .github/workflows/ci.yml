@@ -23,6 +23,44 @@ jobs:
       # Includes real Vitest 5 V8/Istanbul runs and the browser bundle check.
       - run: npm run check
 
+  self-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:coverage
+      - name: Enforce CRAP ceiling and known coverage
+        run: npm run --silent analyze:self -- --format json > coverage/crap-report.json
+      - name: Summarize analysis
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          if [ -s coverage/crap-report.json ]; then
+            jq -r '
+              "## Self-analysis",
+              "",
+              "Functions: \(.summary.total)",
+              "Above CRAP ceiling \(.threshold): \(.summary.failed)",
+              "Unknown coverage: \(.summary.unknown)",
+              "Highest measured CRAP: \([.functions[].crap | select(. != null)] | max)",
+              "",
+              "Download the crap-analysis artifact for per-function scores and coverage."
+            ' coverage/crap-report.json >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: crap-analysis
+          path: |
+            coverage/coverage-final.json
+            coverage/crap-report.json
+          retention-days: 14
+
   vitest3:
     runs-on: ubuntu-latest
     steps:
