@@ -28,7 +28,7 @@ node dist/bin.js --root ../my-app src \
 
 During development, use `npm run dev -- <arguments>` instead of building first. The package is private and has not been published to npm.
 
-The analyzer reads coverage you supply; it does not run the target project's tests. Enable the `json` coverage reporter in Vitest or Jest to produce Istanbul-format `coverage-final.json`. Both Vitest V8 and Istanbul providers are tested end to end. Raw V8 JSON and LCOV are not accepted.
+The analyzer reads coverage you supply; it does not run the target project's tests. Enable the `json` coverage reporter in Vitest or Jest to produce Istanbul-format `coverage-final.json`. Vitest 5 V8/Istanbul and Vitest 3.2.7 V8 are tested end to end. Raw V8 JSON and LCOV are not accepted.
 
 ## Effect-aware discovery
 
@@ -55,7 +55,7 @@ Supported inline forms:
 
 Recognition follows lexical bindings, including parameters, destructuring, blocks, catch clauses, loops, and hoisted `var` declarations. An unrelated object called `Effect` is not classified as the library. Type-only imports do not establish a runtime binding.
 
-All ordinary function bodies are analyzed too: declarations, arrows, anonymous callbacks, constructors, methods, and accessors. Overload signatures and declarations without a body are omitted. A wrapper such as `() => Effect.gen(...)` and its generator have separate rows. Nested decisions and coverage counters are attributed once, to the innermost containing function. Anonymous names include their location and, where available, their enclosing function name.
+All ordinary function bodies are analyzed too: declarations, arrows, anonymous callbacks, constructors, methods, and accessors. Overload signatures and declarations without a body are omitted. A wrapper such as `() => Effect.gen(...)` and its generator have separate rows. Nested decisions and coverage counters are attributed once, to the innermost containing function. Anonymous names include their call context, argument position, source location, and enclosing function where available. For example, a handler becomes `handlers.handle("createTask")[arg2]@12:4`, and a recovery callback includes `Effect.catchTag("Missing")[arg2]`.
 
 ## Scoring
 
@@ -70,21 +70,34 @@ For complexity 2, no coverage produces CRAP 6; 50% coverage produces 2.5; full c
 
 Missing coverage is `null` in JSON and `N/A` in text, never silently zero or full coverage. A missing branch counter is only treated as structurally inapplicable when no branch-producing syntax was found. Empty function bodies require an unambiguous function-entry counter; its hit status supplies the coverage ratio, with zero statement counters still reported. Malformed coverage JSON or mismatched counter maps fails the run.
 
-JSON has `schemaVersion: 1`, selected `files`, a `functions` array, and summary counts. Each function includes its name, kind, source and body ranges, complexity, coverage counts and ratios, CRAP, and status. Lines are one-based and JSON columns are zero-based UTF-16 offsets; text locations use one-based columns. Functions sort by descending measured CRAP, followed by unknown scores.
+Vitest 3 V8 reports can represent statements as whole lines, including lines shared by several callbacks. For a branch-free expression body, an exact function-entry counter or exact V8 function execution range establishes whether its single expression ran. We never use a sibling's line hits for this fallback. JSON `coverage.statementBasis` identifies `statements`, `function-entry`, or `v8-function-range` (or `null` when unavailable). Functions with actual branching still need branch counters. Conflicting execution counters stay unknown. Function/branch ranges extending beyond a body are normalized only when the source confirms the extra characters are whitespace or closing punctuation; line numbers alone are insufficient.
+
+JSON has `schemaVersion: 1`, selected `files`, a `functions` array, summary counts, and an `exclusions` audit with active patterns and skipped paths. Each function includes its name, kind, source and body ranges, complexity, coverage counts and ratios, CRAP, and status. Lines are one-based and JSON columns are zero-based UTF-16 offsets; text locations use one-based columns. Functions sort by descending measured CRAP, followed by unknown scores.
 
 ## CLI options
 
-| Option                 | Behavior                                                     |
-| ---------------------- | ------------------------------------------------------------ |
-| `[paths...]`           | Files or recursively scanned directories; defaults to `src`  |
-| `--root <path>`        | Base directory for inputs and relative coverage file entries |
-| `--coverage <path>`    | Existing Istanbul JSON report                                |
-| `--threshold <number>` | Maximum allowed CRAP; default 6                              |
-| `--format text\|json`  | Output format; default text                                  |
-| `--require-coverage`   | Fail if any analyzed function has unknown coverage           |
-| `--help`, `-h`         | Print usage                                                  |
+| Option                    | Behavior                                                      |
+| ------------------------- | ------------------------------------------------------------- |
+| `[paths...]`              | Files or recursively scanned directories; defaults to `src`   |
+| `--root <path>`           | Base directory for inputs and relative coverage file entries  |
+| `--coverage <path>`       | Existing Istanbul JSON report                                 |
+| `--threshold <number>`    | Maximum allowed CRAP; default 6                               |
+| `--format text\|json`     | Output format; default text                                   |
+| `--exclude <glob>`        | Exclude a project-relative path glob; repeatable              |
+| `--no-default-exclusions` | Disable generated-source defaults; retain explicit exclusions |
+| `--require-coverage`      | Fail if any analyzed function has unknown coverage            |
+| `--help`, `-h`            | Print usage                                                   |
 
 Directory scans include `.ts`, `.tsx`, `.mts`, and `.cts`. They skip declaration files, `.test`/`.spec` files, hidden entries, symlinks, and `node_modules`, `dist`, `build`, `coverage`, `.next`, and `__tests__` directories. Overlapping inputs are deduplicated. No matching source files is an error.
+
+Generated-source defaults exclude `**/generated/**`, `**/gen/**`, `**/*.generated.{ts,tsx,mts,cts}`, and `**/*.gen.{ts,tsx,mts,cts}`. Additional globs match normalized project-relative paths, including explicit file inputs. Use forward slashes and quote patterns to prevent shell expansion. Globs support `*`, `**`, `?`, character classes, and braces; leading `!` is literal, not a re-inclusion rule. An excluded directory is reported once without enumerating its contents.
+
+```sh
+node dist/bin.js apps packages --exclude '**/*.stories.tsx' --exclude 'apps/web/e2e/**'
+node dist/bin.js src --no-default-exclusions --exclude '**/legacy/**'
+```
+
+Library callers use `exclude: string[]` and `useDefaultExclusions: false` for the same behavior. Disabling generated defaults does not disable the baseline directory and test-file filters.
 
 | Exit code | Meaning                                                                              |
 | --------- | ------------------------------------------------------------------------------------ |
@@ -129,7 +142,7 @@ Tests exercise analysis with an in-memory filesystem and injected parser, and ve
 - Recognition is local and import-based. Re-exports, dynamically selected APIs, CommonJS imports, reassigned namespace properties, and aliases such as `const E = Effect` are not resolved. Their functions still receive ordinary analysis. Effect 4 and additional APIs need dedicated compatibility fixtures.
 - Coverage must correspond to the current source and be remapped to TypeScript. Absolute paths or paths resolved against `--root` must match; no suffix guessing is performed. Reports from another checkout need regenerated or remapped paths. Stale reports cannot be reliably detected from Istanbul metadata alone.
 - Source-map end columns of `null` are matched using the start position and ending line. Implicit-else placeholders use their parent branch's location. Complex source transformations can still leave functions with unknown coverage; use `--require-coverage` for a strict gate.
-- There is no project-wide type checker, editor integration, automatic test execution, custom exclusion configuration, or test-runner plugin yet.
+- There is no project-wide type checker, editor integration, automatic test execution, or test-runner plugin yet. Some transformed or uninstrumented callbacks still have unknown coverage.
 
 ## Develop
 
@@ -137,6 +150,10 @@ Tests exercise analysis with an in-memory filesystem and injected parser, and ve
 npm run check          # Typecheck, Oxlint, Oxfmt check, tests, build
 npm run fmt            # Format with Oxfmt
 npm run test:coverage  # Generate this analyzer's coverage
+npm run setup:compat   # Install the isolated, pinned Vitest 3 fixture dependencies
+npm run test:compat    # Exercise actual Vitest 3 V8 reports
 ```
 
-The tests include real Effect programs run under both Vitest coverage providers, with fully covered, partially covered, never-executed, nested, and empty functions. Parser tests cover aliases, shadowing, TSX, Unicode positions, and complexity boundaries.
+The tests include real Effect programs run under both Vitest 5 coverage providers and an isolated Vitest 3.2.7 V8 fixture, with fully covered, partially covered, never-executed, nested, and empty functions. Parser tests cover aliases, shadowing, TSX, Unicode positions, and complexity boundaries. Synthetic attribution regressions deliberately include shared-line hits, punctuation-expanded ranges, missing branch counters, and conflicting metadata. Compatibility fixtures contain no private application code.
+
+GitHub Actions runs the standard checks (including browser bundling and Vitest 5 integration tests) on Node 22 and 24, with a separate job for the pinned Vitest 3 fixture.

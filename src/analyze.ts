@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Coverage from "./coverage.js";
 import * as Model from "./model.js";
 import * as Parser from "./parser.js";
+import * as Exclusions from "./exclusions.js";
 import type * as SourceParser from "./sourceParser.js";
 
 export interface AnalyzeOptions {
@@ -13,6 +14,8 @@ export interface AnalyzeOptions {
   root?: string;
   coverage?: string;
   threshold?: number;
+  exclude?: readonly string[];
+  useDefaultExclusions?: boolean;
 }
 
 export type Services = FileSystem.FileSystem | Path.Path | SourceParser.SourceParser;
@@ -40,12 +43,19 @@ function selectFiles(
   root: string,
   fs: FileSystem.FileSystem,
   path: Path.Path,
+  exclude: (path: string) => boolean,
 ) {
   return Effect.gen(function* () {
     const files = new Set<string>();
     const visited = new Set<string>();
+    const excludedPaths = new Set<string>();
     const visit = (input: string, explicit: boolean): Effect.Effect<void, Model.AnalysisError> =>
       Effect.gen(function* () {
+        const relative = path.relative(root, input).split(path.sep).join("/");
+        if (exclude(relative)) {
+          excludedPaths.add(relative);
+          return;
+        }
         // FileSystem.stat follows links on Node. Probe readLink first, including dangling
         // links; ordinary files fail this probe and are validated by realPath/stat below.
         if (!explicit && Option.isSome(yield* fs.readLink(input).pipe(Effect.option))) return;
@@ -66,7 +76,7 @@ function selectFiles(
           });
       });
     for (const input of inputs) yield* visit(path.resolve(root, input), true);
-    return [...files].sort();
+    return { files: [...files].sort(), excludedPaths: [...excludedPaths].sort() };
   });
 }
 
@@ -82,11 +92,19 @@ export const analyze = (
       return yield* new Model.AnalysisError({
         message: "Threshold must be a finite non-negative number",
       });
-    const files = yield* selectFiles(
+    const defaults = options.useDefaultExclusions ?? true;
+    const patterns = [...(defaults ? Exclusions.defaults : []), ...(options.exclude ?? [])];
+    const exclude = yield* Effect.try({
+      try: () => Exclusions.matcher(patterns),
+      catch: (cause) =>
+        new Model.AnalysisError({ message: `Invalid exclusions: ${String(cause)}`, cause }),
+    });
+    const { files, excludedPaths } = yield* selectFiles(
       options.paths?.length ? options.paths : ["src"],
       root,
       fs,
       path,
+      exclude,
     );
     if (files.length === 0)
       return yield* new Model.AnalysisError({ message: "No analyzable TypeScript files selected" });
@@ -105,6 +123,7 @@ export const analyze = (
           const coverages = Coverage.attributeCoverage(
             units,
             coverage ? Coverage.findCoverage(coverage, file, root, path) : undefined,
+            source,
           );
           return units.map((unit, i): Model.FunctionResult => {
             const measured = coverages[i]!;
@@ -133,6 +152,7 @@ export const analyze = (
       schemaVersion: 1,
       threshold,
       files: files.map((file) => path.relative(root, file).split(path.sep).join("/")),
+      exclusions: { defaults, patterns, excludedPaths },
       functions,
       summary: {
         total: functions.length,

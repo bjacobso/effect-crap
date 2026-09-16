@@ -153,6 +153,30 @@ function assignedName(node: Oxc.Node, parents: WeakMap<Oxc.Node, Oxc.Node>): str
   return undefined;
 }
 
+function callbackName(node: Ast.FunctionNode, parent: Oxc.Node | undefined): string {
+  if (parent?.type !== "CallExpression") return "callback";
+  const callee = Ast.unwrap(parent.callee);
+  const argument = parent.arguments.findIndex((arg) => Ast.unwrap(arg) === node) + 1;
+  let label: string | undefined;
+  let method: string | undefined;
+  if (callee.type === "Identifier") label = method = callee.name;
+  if (
+    callee.type === "MemberExpression" &&
+    (!callee.computed || callee.property.type === "Literal")
+  ) {
+    method = Ast.propertyName(callee.property);
+    label = callee.object.type === "Identifier" ? `${callee.object.name}.${method}` : method;
+  }
+  if (!label) return `callback[arg${argument}]`;
+  if (method && ["handle", "group", "fn", "catchTag"].includes(method)) {
+    const tag = parent.arguments.find(
+      (arg) => arg.type === "Literal" && typeof arg.value === "string" && arg.value.length <= 80,
+    );
+    if (tag?.type === "Literal") label += `(${JSON.stringify(tag.value)})`;
+  }
+  return `${label}[arg${argument}]`;
+}
+
 export function parseSource(
   file: string,
   source: string,
@@ -186,7 +210,7 @@ export function parseSource(
             let ancestor = parents.get(node);
             while (ancestor && !names.has(ancestor)) ancestor = parents.get(ancestor);
             const prefix = ancestor ? `${names.get(ancestor)}::` : "";
-            name = `${prefix}${kind === "function" ? "callback" : kind}@${start.line}:${start.column}`;
+            name = `${prefix}${kind === "function" ? callbackName(node, parent) : kind}@${start.line}:${start.column}`;
           }
           names.set(node, name);
           const body = node.body!;
@@ -209,6 +233,7 @@ export function parseSource(
             complexity: complexity(node),
             expectsStatements,
             expectsBranches: expectsBranches(node),
+            expressionBody: body.type !== "BlockStatement",
           };
         });
       },

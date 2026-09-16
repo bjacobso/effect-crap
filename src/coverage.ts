@@ -28,7 +28,11 @@ const FileSchema = Schema.Struct({
   statementMap: record(RangeSchema),
   s: record(Counter),
   branchMap: record(
-    Schema.Struct({ loc: RangeSchema, locations: Schema.Array(BranchRangeSchema) }),
+    Schema.Struct({
+      type: Schema.optional(Schema.String),
+      loc: RangeSchema,
+      locations: Schema.Array(BranchRangeSchema),
+    }),
   ),
   b: record(Schema.Array(Counter)),
   fnMap: record(Schema.Struct({ name: Schema.String, loc: RangeSchema })),
@@ -118,6 +122,7 @@ function count(hits: readonly number[], empty: number | null): Model.CoverageCou
 export function unknownCoverage(reason: string): Model.FunctionCoverage {
   return {
     status: "unknown",
+    statementBasis: null,
     reason,
     statements: count([], null),
     branches: count([], null),
@@ -141,11 +146,58 @@ export function findCoverage(
 export function attributeCoverage(
   units: readonly Model.FunctionUnit[],
   file?: CoverageFile,
+  source?: string,
 ): Model.FunctionCoverage[] {
   if (!file) return units.map(() => unknownCoverage("No unambiguous coverage entry for this file"));
   const statements = units.map(() => [] as number[]);
   const branches = units.map(() => [] as number[]);
   const entries = units.map(() => [] as number[]);
+  const executionRanges = units.map(() => [] as number[]);
+  const lines = source?.split(/\r\n|[\n\r\u2028\u2029]/);
+  const samePosition = (a: Model.Position, b: Model.Position) => compare(a, b) === 0;
+  // v8-to-istanbul may extend a function through its declaration's comma/semicolon.
+  // Require an exact start and verify every extra source character, never a line-only match.
+  const matchesFunction = (range: CoverageRange, unit: Model.FunctionUnit): boolean => {
+    if (!samePosition(range.start, unit.range.start) && !samePosition(range.start, unit.body.start))
+      return false;
+    if (range.end.line !== unit.range.end.line) return false;
+    if (range.end.column === null) return false;
+    if (range.end.column === unit.range.end.column) return true;
+    const line = lines?.[range.end.line - 1];
+    return (
+      line !== undefined &&
+      range.end.column <= line.length &&
+      range.end.column > unit.range.end.column &&
+      /^[\s,;)]+$/.test(line.slice(unit.range.end.column, range.end.column))
+    );
+  };
+  const exactOwner = (range: CoverageRange): number => {
+    const matches = units.flatMap((unit, index) => (matchesFunction(range, unit) ? [index] : []));
+    return matches.length === 1 ? matches[0]! : -1;
+  };
+  const trimBranchEnd = (range: CoverageRange): CoverageRange => {
+    let result = range;
+    for (const unit of units) {
+      const end = result.end.column;
+      const line = lines?.[result.end.line - 1];
+      if (
+        end === null ||
+        line === undefined ||
+        end > line.length ||
+        result.end.line !== unit.range.end.line
+      )
+        continue;
+      if (
+        compare(result.start, unit.range.start) < 0 ||
+        compare(result.start, unit.range.end) >= 0 ||
+        end <= unit.range.end.column
+      )
+        continue;
+      if (/^[\s,;)]+$/.test(line.slice(unit.range.end.column, end)))
+        result = { start: result.start, end: unit.range.end };
+    }
+    return result;
+  };
   const owner = (range: CoverageRange): number => {
     let found = -1;
     for (let i = 0; i < units.length; i++) {
@@ -162,21 +214,49 @@ export function attributeCoverage(
     if (index >= 0) statements[index]!.push(file.s[id]!);
   }
   for (const [id, branch] of Object.entries(file.branchMap)) {
-    const index = owner(branch.loc);
+    const execution =
+      branch.type === "branch" && file.b[id]!.length === 1 ? exactOwner(branch.loc) : -1;
+    if (execution >= 0) executionRanges[execution]!.push(file.b[id]![0]!);
+    const index = owner(trimBranchEnd(branch.loc));
     if (index >= 0) branches[index]!.push(...file.b[id]!);
   }
   for (const [id, fn] of Object.entries(file.fnMap)) {
-    const index = owner(fn.loc);
-    // A nested or transformed fnMap range must not prove the parent ran.
+    let index = exactOwner(fn.loc);
+    // Modern Istanbul sometimes ends a body at an unknown end-of-line column.
+    if (index < 0 && fn.loc.end.column === null) {
+      const candidates = units.flatMap((unit, i) =>
+        fn.loc.end.line === unit.range.end.line &&
+        (samePosition(fn.loc.start, unit.body.start) ||
+          samePosition(fn.loc.start, unit.range.start))
+          ? [i]
+          : [],
+      );
+      if (candidates.length === 1) index = candidates[0]!;
+    }
     if (index >= 0) entries[index]!.push(file.f[id]!);
   }
   return units.map((unit, index) => {
     const entry = entries[index]!;
     if (entry.length > 1) return unknownCoverage("Ambiguous function coverage metadata");
     const statement = count(statements[index]!, null);
+    let statementBasis: Model.FunctionCoverage["statementBasis"] = statement.total
+      ? "statements"
+      : null;
+    const execution = entry.length === 1 ? entry : executionRanges[index]!;
+    if (entry.length === 1 && executionRanges[index]!.some((hit) => hit > 0 !== entry[0]! > 0))
+      return unknownCoverage("Conflicting function execution counters");
+    // An exact execution hit proves a single branch-free expression was evaluated.
+    // Whole-line counters can instead reflect closure creation or a sibling callback.
+    if (unit.expressionBody && !unit.expectsBranches && execution.length === 1) {
+      statement.covered = execution[0]! > 0 ? 1 : 0;
+      statement.total = 1;
+      statement.ratio = statement.covered;
+      statementBasis = entry.length === 1 ? "function-entry" : "v8-function-range";
+    }
     // Empty bodies still require evidence that the function was actually invoked.
-    if (!statement.total && !unit.expectsStatements && entry.length === 1) {
-      statement.ratio = entry[0]! > 0 ? 1 : 0;
+    if (!statement.total && !unit.expectsStatements && execution.length === 1) {
+      statement.ratio = execution[0]! > 0 ? 1 : 0;
+      statementBasis = entry.length === 1 ? "function-entry" : "v8-function-range";
     }
     const branch = count(branches[index]!, unit.expectsBranches ? null : 1);
     const ratio =
@@ -185,6 +265,7 @@ export function attributeCoverage(
         : Math.min(statement.ratio, branch.ratio);
     return {
       status: ratio === null ? "unknown" : "measured",
+      statementBasis,
       reason: ratio === null ? "Missing attributable statement or branch counters" : null,
       statements: statement,
       branches: branch,

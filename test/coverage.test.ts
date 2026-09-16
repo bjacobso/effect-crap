@@ -34,6 +34,83 @@ describe("CRAP", () => {
 });
 
 describe("coverage attribution", () => {
+  it("uses exact V8 execution ranges, not shared whole-line hits", () => {
+    const source = "const pair = () => [() => 1, () => 2];";
+    const units = Runtime.runSync(Parser.parseSource("a.ts", source));
+    const file: Coverage.CoverageFile = {
+      ...emptyFile,
+      statementMap: { "0": range(0, source.length) },
+      s: { "0": 10 },
+      branchMap: {
+        "0": { type: "branch", loc: units[1]!.range, locations: [units[1]!.range] },
+        "1": { type: "branch", loc: units[2]!.range, locations: [units[2]!.range] },
+      },
+      b: { "0": [2], "1": [0] },
+    };
+    const result = Coverage.attributeCoverage(units, file, source);
+    expect(result[1]).toMatchObject({ ratio: 1, statementBasis: "v8-function-range" });
+    expect(result[2]).toMatchObject({ ratio: 0, statementBasis: "v8-function-range" });
+    expect(result[0]!.ratio).toBeNull();
+  });
+
+  it("does not infer expression branch coverage from a function execution hit", () => {
+    const source = "const choose = (x: boolean) => x ? 1 : 0;";
+    const units = Runtime.runSync(Parser.parseSource("a.ts", source));
+    const result = Coverage.attributeCoverage(
+      units,
+      { ...emptyFile, fnMap: { "0": { name: "choose", loc: units[0]!.range } }, f: { "0": 1 } },
+      source,
+    );
+    expect(result[0]!.ratio).toBeNull();
+  });
+
+  it("matches trailing punctuation without assigning the child entry to its parent", () => {
+    const source = "function outer() { const inner = () => 1; return inner; }";
+    const units = Runtime.runSync(Parser.parseSource("a.ts", source));
+    const child = units[1]!;
+    const expanded = {
+      start: child.range.start,
+      end: { ...child.range.end, column: child.range.end.column + 1 },
+    };
+    const file: Coverage.CoverageFile = {
+      ...emptyFile,
+      fnMap: { "0": { name: "inner", loc: expanded } },
+      f: { "0": 0 },
+    };
+    const result = Coverage.attributeCoverage(units, file, source);
+    expect(result[1]).toMatchObject({ ratio: 0, statementBasis: "function-entry" });
+    expect(result[0]!.ratio).toBeNull();
+    expect(Coverage.attributeCoverage(units, file)[1]!.ratio).toBeNull();
+  });
+
+  it("rejects function ranges that extend into executable code", () => {
+    const source = "const f = () => 1; console.log(2);";
+    const units = Runtime.runSync(Parser.parseSource("a.ts", source));
+    const expanded = { start: units[0]!.range.start, end: { line: 1, column: source.length } };
+    const result = Coverage.attributeCoverage(
+      units,
+      { ...emptyFile, fnMap: { "0": { name: "f", loc: expanded } }, f: { "0": 1 } },
+      source,
+    );
+    expect(result[0]!.ratio).toBeNull();
+  });
+
+  it("preserves unknown when execution metadata conflicts", () => {
+    const units = Runtime.runSync(Parser.parseSource("a.ts", "const f = () => 1;"));
+    const location = units[0]!.range;
+    const result = Coverage.attributeCoverage(units, {
+      ...emptyFile,
+      fnMap: { "0": { name: "f", loc: location } },
+      f: { "0": 1 },
+      branchMap: { "0": { type: "branch", loc: location, locations: [location] } },
+      b: { "0": [0] },
+    });
+    expect(result[0]).toMatchObject({
+      ratio: null,
+      reason: "Conflicting function execution counters",
+    });
+  });
+
   it("does not borrow nested callback statements", () => {
     const source = "const outer = () => { const inner = () => 1; return inner(); };";
     const units = Runtime.runSync(Parser.parseSource("a.ts", source));

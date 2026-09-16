@@ -97,6 +97,68 @@ describe("real coverage providers", () => {
 });
 
 describe("CLI and source selection", () => {
+  it("excludes generated sources and reports the skipped paths", async () => {
+    const root = await temp();
+    await mkdir(path.join(root, "src/generated"), { recursive: true });
+    await writeFile(path.join(root, "src/generated/client.ts"), "broken (");
+    await writeFile(path.join(root, "src/client.generated.ts"), "broken (");
+    await writeFile(path.join(root, "src/app.ts"), "export const app = () => 1;");
+    const report = await Runtime.runPromise(Analyze.analyze({ root }));
+    expect(report.files).toEqual(["src/app.ts"]);
+    expect(report.exclusions.excludedPaths).toEqual(["src/client.generated.ts", "src/generated"]);
+    const optOut = await Runtime.runPromise(
+      Effect.either(Analyze.analyze({ root, useDefaultExclusions: false })),
+    );
+    expect(optOut._tag).toBe("Left");
+  });
+
+  it("applies repeated exclusion globs to explicit files as well as directories", async () => {
+    const root = await temp();
+    await mkdir(path.join(root, "src"));
+    for (const name of ["a.ts", "b.ts", "c.ts"])
+      await writeFile(path.join(root, "src", name), "export const f = () => 1;");
+    const result = await Runtime.runPromise(
+      Cli.runCli([
+        "--root",
+        root,
+        "src",
+        "src/a.ts",
+        "--exclude",
+        "**/a.ts",
+        "--exclude=**/b.ts",
+        "--format=json",
+      ]),
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      files: ["src/c.ts"],
+      exclusions: { excludedPaths: ["src/a.ts", "src/b.ts"] },
+    });
+    const empty = await Runtime.runPromise(
+      Effect.either(Analyze.analyze({ root, exclude: ["**/*"] })),
+    );
+    expect(empty._tag).toBe("Left");
+  });
+
+  it("can disable generated defaults without disabling user exclusions", async () => {
+    const root = await temp();
+    await mkdir(path.join(root, "src"));
+    await writeFile(path.join(root, "src/client.generated.ts"), "export const f = () => 1;");
+    await writeFile(path.join(root, "src/skip.ts"), "broken (");
+    const result = await Runtime.runPromise(
+      Cli.runCli([
+        "--root",
+        root,
+        "--no-default-exclusions",
+        "--exclude=**/skip.ts",
+        "--format=json",
+      ]),
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      files: ["src/client.generated.ts"],
+      exclusions: { defaults: false, patterns: ["**/skip.ts"] },
+    });
+  });
+
   it("skips directory cycles and broken symlinks during traversal", async () => {
     const root = await temp();
     await mkdir(path.join(root, "src"));

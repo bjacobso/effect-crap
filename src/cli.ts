@@ -11,6 +11,8 @@ Paths default to src. Directory inputs are searched recursively.
   --root <path>        Resolve inputs and relative coverage paths from this root
   --threshold <n>      Fail for CRAP > n (default: 6)
   --format text|json   Output format (default: text)
+  --exclude <glob>     Exclude a project-relative path glob; repeatable
+  --no-default-exclusions  Include generated sources normally excluded
   --require-coverage  Fail when any function's coverage is unknown
   --help, -h          Show help
 
@@ -29,6 +31,9 @@ function textReport(report: Model.AnalysisReport): string {
       ...rows,
       "",
       `${report.summary.total} functions; ${report.summary.failed} above ${report.threshold}; ${report.summary.unknown} with unknown coverage.`,
+      ...(report.exclusions.excludedPaths.length
+        ? [`Excluded ${report.exclusions.excludedPaths.length} matching paths.`]
+        : []),
     ].join("\n") + "\n"
   );
 }
@@ -51,6 +56,8 @@ export const runCli = (
       root: values.root,
       coverage: values.coverage,
       threshold: values.threshold === undefined ? undefined : Number(values.threshold),
+      exclude: values.exclude,
+      useDefaultExclusions: !values["no-default-exclusions"],
     });
     return {
       stdout:
@@ -72,6 +79,8 @@ interface Arguments {
     threshold?: string;
     format: string;
     "require-coverage": boolean;
+    exclude: string[];
+    "no-default-exclusions": boolean;
   };
   positionals: string[];
 }
@@ -79,7 +88,12 @@ interface Arguments {
 /** Small portable argument parser; no runtime-specific CLI dependencies. */
 function parseArguments(args: readonly string[]): Arguments {
   const result: Arguments = {
-    values: { format: "text", "require-coverage": false },
+    values: {
+      format: "text",
+      "require-coverage": false,
+      exclude: [],
+      "no-default-exclusions": false,
+    },
     positionals: [],
   };
   for (let i = 0; i < args.length; i++) {
@@ -96,18 +110,26 @@ function parseArguments(args: readonly string[]): Arguments {
       result.values["require-coverage"] = true;
       continue;
     }
+    if (arg === "--no-default-exclusions") {
+      result.values["no-default-exclusions"] = true;
+      continue;
+    }
     if (!arg.startsWith("-")) {
       result.positionals.push(arg);
       continue;
     }
     const equals = arg.indexOf("=");
     const key = (equals < 0 ? arg : arg.slice(0, equals)).slice(2);
-    if (!arg.startsWith("--") || !["coverage", "root", "threshold", "format"].includes(key))
+    if (
+      !arg.startsWith("--") ||
+      !["coverage", "root", "threshold", "format", "exclude"].includes(key)
+    )
       throw new Error(`Unknown option: ${arg}`);
     const value = equals < 0 ? args[++i] : arg.slice(equals + 1);
     if (value === undefined || (equals < 0 && value.startsWith("--")))
       throw new Error(`Missing value for --${key}`);
-    result.values[key as "coverage" | "root" | "threshold" | "format"] = value;
+    if (key === "exclude") result.values.exclude.push(value);
+    else result.values[key as "coverage" | "root" | "threshold" | "format"] = value;
   }
   return result;
 }

@@ -7,6 +7,15 @@ const parse = (source: string, file = "sample.ts") =>
   Runtime.runSync(Parser.parseSource(file, source));
 
 describe("Effect function discovery", () => {
+  it("names handlers and combinator callbacks using their call context", () => {
+    const units = parse(`import * as Effect from "effect/Effect";
+      handlers.handle("createTask", () => Effect.gen(function* () {
+        yield* Effect.fail("failure").pipe(Effect.catchTag("Missing", () => Effect.succeed(0)));
+      }));`);
+    expect(units[0]!.name).toContain('handlers.handle("createTask")[arg2]');
+    expect(units[1]!.name).toContain('handlers.handle("createTask")[arg2]');
+    expect(units[2]!.name).toContain('Effect.catchTag("Missing")[arg2]');
+  });
   it("finds a named generator and counts its branches, not its yields", () => {
     const [unit] = parse(`import * as Effect from "effect/Effect";
       const checkout = Effect.gen(function* () {

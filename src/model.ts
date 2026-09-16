@@ -25,6 +25,7 @@ export interface FunctionUnit {
   complexity: number;
   expectsStatements: boolean;
   expectsBranches: boolean;
+  expressionBody: boolean;
 }
 
 export interface CoverageCount {
@@ -35,6 +36,7 @@ export interface CoverageCount {
 }
 
 export interface FunctionCoverage {
+  statementBasis: "statements" | "function-entry" | "v8-function-range" | null;
   status: "measured" | "unknown";
   reason: string | null;
   statements: CoverageCount;
@@ -53,6 +55,7 @@ export interface AnalysisReport {
   schemaVersion: 1;
   threshold: number;
   files: string[];
+  exclusions: { defaults: boolean; patterns: string[]; excludedPaths: string[] };
   functions: FunctionResult[];
   summary: { total: number; failed: number; unknown: number };
 }

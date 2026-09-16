@@ -26,6 +26,8 @@
     "dev": "tsx src/bin.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "setup:compat": "npm ci --prefix test/fixtures/vitest3",
+    "test:compat": "vitest run --config vitest.compat.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings .",
     "fmt": "oxfmt .",
@@ -36,6 +38,7 @@
     "@effect/platform": "^0.97.2",
     "@effect/platform-node": "^0.108.2",
     "effect": "^3.22.2",
+    "minimatch": "^10.2.6",
     "oxc-parser": "^0.150.0"
   },
   "devDependencies": {
