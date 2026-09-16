@@ -106,51 +106,73 @@ function classify(
   return "function";
 }
 
+function assignmentTargetName(node: Oxc.Node): string | undefined {
+  switch (node.type) {
+    case "Identifier":
+      return node.name;
+    case "MemberExpression":
+      return Ast.propertyName(node.property);
+    default:
+      return undefined;
+  }
+}
+
+function memberFunctionName(
+  member: Extract<Oxc.Node, { type: "Property" }> | Oxc.MethodDefinition | Oxc.PropertyDefinition,
+  parents: WeakMap<Oxc.Node, Oxc.Node>,
+): string | undefined {
+  const container = parents.get(member);
+  const owner = container?.type === "ClassBody" ? parents.get(container) : container;
+  const ownerName = owner ? ownerFunctionName(owner, parents) : undefined;
+  const key = Ast.propertyName(member.key);
+  const accessor =
+    "kind" in member && (member.kind === "get" || member.kind === "set")
+      ? `${member.kind} ${key}`
+      : key;
+  return [ownerName, accessor].filter(Boolean).join(".") || undefined;
+}
+
+function ownerFunctionName(
+  owner: Oxc.Node,
+  parents: WeakMap<Oxc.Node, Oxc.Node>,
+): string | undefined {
+  if (owner.type === "ClassDeclaration" || owner.type === "ClassExpression") return owner.id?.name;
+  return assignedName(owner, parents);
+}
+
+function isPipeMember(node: Oxc.Node): boolean {
+  return (
+    node.type === "MemberExpression" &&
+    (!node.computed || node.property.type === "Literal") &&
+    Ast.propertyName(node.property) === "pipe"
+  );
+}
+
 function assignedName(node: Oxc.Node, parents: WeakMap<Oxc.Node, Oxc.Node>): string | undefined {
   const parent = parents.get(node);
   if (!parent) return undefined;
-  if (parent.type === "VariableDeclarator" && parent.id.type === "Identifier")
-    return parent.id.name;
-  if (
-    (parent.type === "Property" ||
-      parent.type === "MethodDefinition" ||
-      parent.type === "PropertyDefinition") &&
-    parent.value === node
-  ) {
-    const key = Ast.propertyName(parent.key);
-    const container = parents.get(parent);
-    const owner = container?.type === "ClassBody" ? parents.get(container) : container;
-    const ownerName =
-      owner &&
-      (owner.type === "ClassDeclaration" || owner.type === "ClassExpression"
-        ? owner.id?.name
-        : assignedName(owner, parents));
-    const accessor =
-      "kind" in parent && (parent.kind === "get" || parent.kind === "set")
-        ? `${parent.kind} ${key}`
-        : key;
-    return [ownerName, accessor].filter(Boolean).join(".") || undefined;
+  // Compare unwrapped nodes so multiple nested TS/parenthesis wrappers retain the name.
+  if (Ast.unwrap(parent) === Ast.unwrap(node)) return assignedName(parent, parents);
+  switch (parent.type) {
+    case "VariableDeclarator":
+      return parent.id.type === "Identifier" ? parent.id.name : undefined;
+    case "Property":
+    case "MethodDefinition":
+    case "PropertyDefinition":
+      return parent.value === node ? memberFunctionName(parent, parents) : undefined;
+    case "AssignmentExpression":
+      return parent.right === node ? assignmentTargetName(parent.left) : undefined;
+    case "ExportDefaultDeclaration":
+      return "default";
+    case "CallExpression":
+      return isPipeMember(parent.callee) ? assignedName(parent, parents) : undefined;
+    case "MemberExpression":
+      return parent.object === node && isPipeMember(parent)
+        ? assignedName(parent, parents)
+        : undefined;
+    default:
+      return undefined;
   }
-  if (parent.type === "AssignmentExpression" && parent.right === node) {
-    if (parent.left.type === "Identifier") return parent.left.name;
-    if (parent.left.type === "MemberExpression") return Ast.propertyName(parent.left.property);
-  }
-  if (parent.type === "ExportDefaultDeclaration") return "default";
-  if (
-    Ast.unwrap(parent) === node ||
-    (parent.type === "CallExpression" &&
-      parent.callee.type === "MemberExpression" &&
-      parent.callee.property.type === "Identifier" &&
-      parent.callee.property.name === "pipe")
-  )
-    return assignedName(parent, parents);
-  if (
-    parent.type === "MemberExpression" &&
-    parent.object === node &&
-    Ast.propertyName(parent.property) === "pipe"
-  )
-    return assignedName(parent, parents);
-  return undefined;
 }
 
 function callbackName(node: Ast.FunctionNode, parent: Oxc.Node | undefined): string {

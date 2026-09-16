@@ -188,6 +188,61 @@ describe("ordinary TypeScript", () => {
     });
   });
 
+  it.each([
+    ["let run; run = () => 1;", ["run"]],
+    ["service.run = () => 1;", ["run"]],
+    ['service["run"] = () => 1;', ["run"]],
+    ["const obj = { nested: { run: () => 1 } };", ["obj.nested.run"]],
+    ["const Service = class Named { run() {} };", ["Named.run"]],
+    ["const Service = class { run() {} };", ["run"]],
+    ["class Service { set value(x: number) {} }", ["Service.set value"]],
+    [
+      "const obj = { get value() { return 1; }, set value(x) {} };",
+      ["obj.get value", "obj.set value"],
+    ],
+    ["const run = (() => 1) as () => number;", ["run"]],
+    ["const run = (() => 1) satisfies () => number;", ["run"]],
+    ["export default () => 1;", ["default"]],
+  ])("preserves assigned names in %s", (source, names) => {
+    expect(parse(source).map((unit) => unit.name)).toEqual(names);
+  });
+
+  it("preserves names through chained and computed pipe calls", () => {
+    const units = parse(`import * as Effect from "effect/Effect";
+      const chained = Effect.gen(function* () { return 1; }).pipe(first).pipe(second);
+      const computed = Effect.gen(function* () { return 2; })["pipe"](first);`);
+    expect(units.map((unit) => [unit.name, unit.kind])).toEqual([
+      ["chained", "effect.gen"],
+      ["computed", "effect.gen"],
+    ]);
+  });
+
+  it("uses callback names when an assignment target cannot be named", () => {
+    const units = parse("[target] = [() => 1]; service[chooseKey()] = () => 2;");
+    expect(units).toHaveLength(2);
+    expect(units.map((unit) => unit.name)).toEqual([
+      expect.stringMatching(/^callback@/),
+      expect.stringMatching(/^callback@/),
+    ]);
+  });
+
+  it("does not propagate assigned names through dynamic or unrelated calls", () => {
+    const units = parse(`import * as Effect from "effect/Effect";
+      const dynamic = Effect.gen(function* () { return 1; })[pipe](first);
+      const unrelated = Effect.gen(function* () { return 2; }).map(first);`);
+    expect(units.map((unit) => unit.kind)).toEqual(["effect.gen", "effect.gen"]);
+    expect(units.map((unit) => unit.name)).toEqual([
+      expect.stringMatching(/^effect.gen@/),
+      expect.stringMatching(/^effect.gen@/),
+    ]);
+  });
+
+  it("does not name functions used to compute property keys after the property owner", () => {
+    const units = parse('const obj = { [(() => "key")()]: 1 };');
+    expect(units).toHaveLength(1);
+    expect(units[0]!.name).toMatch(/^callback\[arg0\]@/);
+  });
+
   it("ignores overload declarations and types in complexity", () => {
     expect(
       parse(`function f(x: string): string;
